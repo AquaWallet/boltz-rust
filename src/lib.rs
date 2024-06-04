@@ -1,21 +1,19 @@
-//! A boltz client for submarine/reverse swaps between Bitcoin, Lightning & Liquid
-//! Refer to tests/ folder for usage
-//! THIS LIBRARY IS IN EARLY ALPHA. TEST AND REVIEW BEFORE USING IN PRODUCTION.
-
-#![allow(E0382)]
-
 /// Error Module
 pub mod error;
 /// Blockchain Network module. Currently only contains electrum interface.
 pub mod network;
+/// payjoin
+pub mod payjoin;
 /// core swap logic
 pub mod swaps;
 /// utilities (key, preimage, error)
 pub mod util;
 
+pub use payjoin::payjoin::{create_taxi_transaction_internal, final_tx, UtxoFFI};
+
 pub use bitcoin::{
     blockdata::locktime::absolute::LockTime,
-    hashes::{hash160, sha256, ripemd160, Hash},
+    hashes::{hash160, ripemd160, sha256, Hash},
     secp256k1::rand::thread_rng,
     secp256k1::schnorr::Signature,
     secp256k1::{Keypair, Message, Secp256k1, XOnlyPublicKey},
@@ -41,6 +39,8 @@ use std::ffi::{c_char, CStr, CString};
 use std::panic::{self, AssertUnwindSafe};
 use std::ptr;
 use std::str::FromStr;
+
+use base64::Engine;
 
 use crate::util::secrets::Preimage;
 
@@ -433,6 +433,108 @@ pub extern "C" fn verify_signature_schnorr(
         Err(_) => 0,
     }
 }
+#[repr(C)]
+pub struct TxResult {
+    pub tx_ptr: *mut c_char,
+    pub error_msg: *mut c_char,
+}
+
+#[no_mangle]
+pub extern "C" fn create_taxi_transaction(
+    send_amount: u64,
+    send_address: *const c_char,
+    change_address: *const c_char,
+    utxos: *const UtxoFFI,
+    utxos_len: usize,
+    user_agent: *const c_char,
+    api_key: *const c_char,
+    subtract_fee_from_amount: bool, 
+    is_lowball: bool,
+    is_testnet: bool,
+) -> TxResult {
+    match create_taxi_transaction_internal(
+        send_amount,
+        send_address,
+        change_address,
+        utxos,
+        utxos_len,
+        user_agent,
+        api_key,
+        subtract_fee_from_amount,
+        is_lowball,
+        is_testnet,
+    ) {
+        Ok(tx_string) => {   
+            let tx_c_string = CString::new(tx_string)
+                .unwrap_or_else(|e| {
+                    log::error!("Failed to convert string: {:?}", e);
+                    CString::new("String conversion failed").unwrap()
+                });
+            let tx_ptr = tx_c_string.into_raw(); // Convert CString to *mut c_char
+            TxResult {
+                tx_ptr,
+                error_msg: std::ptr::null_mut(),
+            }
+        }
+        Err(e) => {
+            let error_msg = CString::new(format!("{}", e))
+                .unwrap_or_else(|_| CString::new("Unknown error").unwrap())
+                .into_raw();
+            TxResult {
+                tx_ptr: std::ptr::null_mut(),
+                error_msg,
+            }
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn create_final_taxi_pset(
+    client_signed_pset: *const c_char,
+    server_signed_pset: *const c_char,
+) -> TxResult {
+    let result = (|| -> Result<TxResult, Box<dyn std::error::Error>> {
+        let client_signed_pset_str = unsafe { 
+            CStr::from_ptr(client_signed_pset)
+                .to_str()?
+                .trim()
+                .to_string()
+        };
+
+        let server_signed_pset_str = unsafe { 
+            CStr::from_ptr(server_signed_pset)
+                .to_str()?
+                .trim()
+                .to_string()
+        };
+
+        let decoded_client = base64::engine::general_purpose::STANDARD.decode(&client_signed_pset_str)?;
+        let decoded_server = base64::engine::general_purpose::STANDARD.decode(&server_signed_pset_str)?;
+
+        let pset_client = elements::encode::deserialize::<elements::pset::PartiallySignedTransaction>(&decoded_client)?;
+        let pset_server = elements::encode::deserialize::<elements::pset::PartiallySignedTransaction>(&decoded_server)?;
+
+        let tx = final_tx(pset_client, pset_server)?;
+
+        let tx_hex = elements::encode::serialize_hex(&tx);
+        let c_str_tx = CString::new(tx_hex)?;
+        Ok(TxResult {
+            tx_ptr: c_str_tx.into_raw(),
+            error_msg: std::ptr::null_mut(),
+        })
+    })();
+
+    match result {
+        Ok(tx_result) => tx_result,
+        Err(e) => {
+            let error_message = CString::new(e.to_string()).unwrap();
+            TxResult {
+                tx_ptr: std::ptr::null_mut(),
+                error_msg: error_message.into_raw(),
+            }
+        }
+    }
+}
 
 #[no_mangle]
 pub extern "C" fn rust_cstr_free(s: *mut c_char) {
@@ -518,8 +620,6 @@ mod tests {
         let message_c_str = to_c_str(message);
         let private_key_c_str = to_c_str(&private_key_hex);
         let public_key_c_str = to_c_str(&public_key_hex);
-
-        println!("2 - publicKey len: {}", public_key_hex.len());
 
         let signature_c_str = sign_message_schnorr(message_c_str, private_key_c_str);
         assert!(!signature_c_str.is_null(), "Signature should not be null");
