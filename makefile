@@ -14,6 +14,14 @@ ANDROID_X86_64_LINKER=$(ANDROID_NDK_HOME)/toolchains/llvm/prebuilt/$(OS_NAME)-x8
 
 SHELL := /bin/bash
 
+BUILD_MODE ?= release
+
+ifeq ($(BUILD_MODE),release)
+	CARGO_BUILD_FLAGS = --release
+else
+	CARGO_BUILD_FLAGS =
+endif
+
 # ##############################################################################
 # # GENERAL
 # ##############################################################################
@@ -43,60 +51,61 @@ init:
 # ##############################################################################
 
 ## all: Compile iOS, Android and bindings targets
+##   Run `BUILD_MODE=debug make all` to build in debug mode
 all: ios android bindings copy
 
 ## ios: Compile the iOS universal library
-ios: target/universal/release/libboltz_rust.a
+ios: target/universal/$(BUILD_MODE)/libboltz_rust.a
 
-target/universal/release/libboltz_rust.a: $(SOURCES) ndk-home
+target/universal/$(BUILD_MODE)/libboltz_rust.a: $(SOURCES) ndk-home
 	@if [ $$(uname) == "Darwin" ] ; then \
-		cargo lipo --release ; \
+		cargo lipo $(CARGO_BUILD_FLAGS) ; \
 		else echo "Skipping iOS compilation on $$(uname)" ; \
 	fi
 	@echo "[DONE] $@"
 
 ## macos: Compile the macOS libraries
-macos: target/x86_64-apple-darwin/release/libboltz_rust.dylib target/aarch64-apple-darwin/release/libboltz_rust.dylib
+macos: target/x86_64-apple-darwin/$(BUILD_MODE)/libboltz_rust.dylib target/aarch64-apple-darwin/$(BUILD_MODE)/libboltz_rust.dylib
 
-target/x86_64-apple-darwin/release/libboltz_rust.dylib: $(SOURCES)
+target/x86_64-apple-darwin/$(BUILD_MODE)/libboltz_rust.dylib: $(SOURCES)
 	@if [ $$(uname) == "Darwin" ] ; then \
-		cargo lipo --release --targets x86_64-apple-darwin ; \
+		cargo lipo $(CARGO_BUILD_FLAGS) --targets x86_64-apple-darwin ; \
 		else echo "Skipping macOS compilation on $$(uname)" ; \
 	fi
 	@echo "[DONE] $@"
 
-target/aarch64-apple-darwin/release/libboltz_rust.dylib: $(SOURCES)
+target/aarch64-apple-darwin/$(BUILD_MODE)/libboltz_rust.dylib: $(SOURCES)
 	@if [ $$(uname) == "Darwin" ] ; then \
-		cargo lipo --release --targets aarch64-apple-darwin ; \
+		cargo lipo $(CARGO_BUILD_FLAGS) --targets aarch64-apple-darwin ; \
 		else echo "Skipping macOS compilation on $$(uname)" ; \
 	fi
 	@echo "[DONE] $@"
 
 ## android: Compile the android targets (arm64, armv7 and i686)
-android: target/aarch64-linux-android/release/libboltz_rust.so target/armv7-linux-androideabi/release/libboltz_rust.so target/i686-linux-android/release/libboltz_rust.so target/x86_64-linux-android/release/libboltz_rust.so
+android: target/aarch64-linux-android/$(BUILD_MODE)/libboltz_rust.so target/armv7-linux-androideabi/$(BUILD_MODE)/libboltz_rust.so target/i686-linux-android/$(BUILD_MODE)/libboltz_rust.so target/x86_64-linux-android/$(BUILD_MODE)/libboltz_rust.so
 
-target/aarch64-linux-android/release/libboltz_rust.so: $(SOURCES) ndk-home
+target/aarch64-linux-android/$(BUILD_MODE)/libboltz_rust.so: $(SOURCES) ndk-home
 	CC_aarch64_linux_android=$(ANDROID_AARCH64_LINKER) \
 	CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$(ANDROID_AARCH64_LINKER) \
-		AR=llvm-ar cargo build --target aarch64-linux-android --release
+		AR=llvm-ar cargo build --target aarch64-linux-android $(CARGO_BUILD_FLAGS)
 	@echo "[DONE] $@"
 
-target/armv7-linux-androideabi/release/libboltz_rust.so: $(SOURCES) ndk-home
+target/armv7-linux-androideabi/$(BUILD_MODE)/libboltz_rust.so: $(SOURCES) ndk-home
 	CC_armv7_linux_androideabi=$(ANDROID_ARMV7_LINKER) \
 	CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER=$(ANDROID_ARMV7_LINKER) \
-		AR=llvm-ar cargo build --target armv7-linux-androideabi --release
+		AR=llvm-ar cargo build --target armv7-linux-androideabi $(CARGO_BUILD_FLAGS)
 	@echo "[DONE] $@"
 
-target/i686-linux-android/release/libboltz_rust.so: $(SOURCES) ndk-home
+target/i686-linux-android/$(BUILD_MODE)/libboltz_rust.so: $(SOURCES) ndk-home
 	CC_i686_linux_android=$(ANDROID_I686_LINKER) \
 	CARGO_TARGET_I686_LINUX_ANDROID_LINKER=$(ANDROID_I686_LINKER) \
-		AR=llvm-ar cargo  build --target i686-linux-android --release
+		AR=llvm-ar cargo build --target i686-linux-android $(CARGO_BUILD_FLAGS)
 	@echo "[DONE] $@"
 
-target/x86_64-linux-android/release/libboltz_rust.so: $(SOURCES) ndk-home
+target/x86_64-linux-android/$(BUILD_MODE)/libboltz_rust.so: $(SOURCES) ndk-home
 	CC_x86_64_linux_android=$(ANDROID_X86_64_LINKER) \
 	CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER=$(ANDROID_X86_64_LINKER) \
-		AR=llvm-ar cargo build --target x86_64-linux-android --release
+		AR=llvm-ar cargo build --target x86_64-linux-android $(CARGO_BUILD_FLAGS)
 	@echo "[DONE] $@"
 
 .PHONY: ndk-home
@@ -110,22 +119,25 @@ ndk-home:
 bindings: target/bindings.h
 
 target/bindings.h: $(SOURCES)
-	cbindgen src/lib.rs -c cbindgen.toml | grep -v \#include | uniq > $@
+	cbindgen --config cbindgen.toml --crate boltz_rust --output target/bindings.h
 	@echo "[DONE] $@"
 
-copy: 
+copy:
 	rm -rf boltz-rust
 	mkdir -p boltz-rust/android/app/src/main/jniLibs/arm64-v8a/ boltz-rust/android/app/src/main/jniLibs/armeabi-v7a/ boltz-rust/android/app/src/main/jniLibs/x86/ boltz-rust/android/app/src/main/jniLibs/x86_64/ boltz-rust/ios
 
-	cp target/aarch64-linux-android/release/libboltz_rust.so boltz-rust/android/app/src/main/jniLibs/arm64-v8a/
-	cp target/armv7-linux-androideabi/release/libboltz_rust.so boltz-rust/android/app/src/main/jniLibs/armeabi-v7a/
-	cp target/i686-linux-android/release/libboltz_rust.so boltz-rust/android/app/src/main/jniLibs/x86/
-	cp target/x86_64-linux-android/release/libboltz_rust.so boltz-rust/android/app/src/main/jniLibs/x86_64/
+	@echo target
+	@echo $(BUILD_MODE)
+
+	cp target/aarch64-linux-android/$(BUILD_MODE)/libboltz_rust.so boltz-rust/android/app/src/main/jniLibs/arm64-v8a/
+	cp target/armv7-linux-androideabi/$(BUILD_MODE)/libboltz_rust.so boltz-rust/android/app/src/main/jniLibs/armeabi-v7a/
+	cp target/i686-linux-android/$(BUILD_MODE)/libboltz_rust.so boltz-rust/android/app/src/main/jniLibs/x86/
+	cp target/x86_64-linux-android/$(BUILD_MODE)/libboltz_rust.so boltz-rust/android/app/src/main/jniLibs/x86_64/
 	cp target/bindings.h boltz-rust/
-	cp target/universal/release/libboltz_rust.a boltz-rust/ios
+	cp target/universal/$(BUILD_MODE)/libboltz_rust.a boltz-rust/ios
 	tar -cvzf boltz-rust.tar.gz boltz-rust
 
-	mv boltz-rust.tar.gz boltz-rust-0.1.6.tar.gz
+	mv boltz-rust.tar.gz boltz-rust-0.1.7.tar.gz
 
 ## :
 
