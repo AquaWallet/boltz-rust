@@ -37,7 +37,7 @@ help: makefile
 ## init: Install missing dependencies.
 .PHONY: init
 init:
-	rustup target add aarch64-apple-ios x86_64-apple-ios
+	rustup target add aarch64-apple-ios x86_64-apple-ios aarch64-apple-ios-sim
 	rustup target add aarch64-apple-darwin x86_64-apple-darwin
 	#rustup target add armv7-apple-ios armv7s-apple-ios i386-apple-ios ## deprecated
 	rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
@@ -60,6 +60,7 @@ ios: target/universal/$(BUILD_MODE)/libboltz_rust.a
 target/universal/$(BUILD_MODE)/libboltz_rust.a: $(SOURCES) ndk-home
 	@if [ $$(uname) == "Darwin" ] ; then \
 		cargo lipo $(CARGO_BUILD_FLAGS) ; \
+		cargo lipo $(CARGO_BUILD_FLAGS) --targets aarch64-apple-ios-sim ; \
 		else echo "Skipping iOS compilation on $$(uname)" ; \
 	fi
 	@echo "[DONE] $@"
